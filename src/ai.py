@@ -28,7 +28,7 @@ def executive_summary(df: pd.DataFrame) -> tuple[str, str]:
     if not key or not s["registros"]: return fallback_summary(s), "fallback"
     try:
         import anthropic
-        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
+        model = os.getenv("ANTHROPIC_MODEL") or "claude-haiku-5-5"
         msg = anthropic.Anthropic(api_key=key).messages.create(
             model=model, max_tokens=300,
             system="Eres analista de datos. Redacta un resumen ejecutivo de 3-4 frases en español usando EXCLUSIVAMENTE las cifras dadas. No inventes datos. Menciona riesgos si hay registros con problemas.",
