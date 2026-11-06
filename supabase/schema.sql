@@ -39,7 +39,8 @@ alter table processed_items enable row level security;
 alter table summaries enable row level security;
 
 -- Políticas de lectura para rol anon (Dashboard en Streamlit)
-create policy "anon read records"   on records   for select to anon using (true);
-create policy "anon read summaries" on summaries for select to anon using (true);
+create policy "anon read records"    on records         for select to anon using (true);
+create policy "anon read summaries"  on summaries       for select to anon using (true);
+create policy "anon read file items" on processed_items for select to anon using (kind = 'file');
 
--- processed_items queda sin política anon: solo service_role tiene acceso
+-- Los registros kind='mail' en processed_items quedan ocultos a anon: solo service_role tiene acceso
