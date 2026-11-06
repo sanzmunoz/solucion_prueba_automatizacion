@@ -5,7 +5,8 @@ from pathlib import Path
 import openpyxl, pdfplumber
 from .schema import Record
 
-ALIASES = {"fecha": "fecha", "cliente": "cliente", "categoria": "categoria", "categoría": "categoria",
+ALIASES = {"fecha": "fecha", "cliente": "cliente", "cliente empresa": "cliente",
+           "categoria": "categoria", "categoría": "categoria",
            "cantidad": "cantidad", "valor": "valor", "estado": "estado",
            "referencia": "referencia", "numero de referencia": "referencia", "número de referencia": "referencia"}
 
@@ -62,18 +63,40 @@ def parse_excel(path: Path) -> list[Record]:
     return _rows(next(it), it, Path(path).name, "xlsx")
 
 LINE = re.compile(r"^(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})\s+(.+?)\s+([A-Z]{2,5}-?\d+)\s+(.+?)\s+(\$?\s?-?[\d.,]+)\s+(\S+)$")
+KV_LINE = re.compile(
+    r"^\s*(?:[-•*]\s*)?(fecha|cliente(?:\s+empresa)?|n[uú]mero\s+de\s+referencia|referencia|categor[ií]a|cantidad|valor|estado)\s*:?\s+(.+?)\s*$",
+    re.IGNORECASE,
+)
 
 def parse_pdf(path: Path) -> list[Record]:
-    """1) tablas con líneas; 2) si no hay, regex por línea de texto (PDF sin bordes)."""
+    """1) tablas con líneas; 2) fila horizontal por regex; 3) pares clave-valor verticales."""
     out, name = [], Path(path).name
     with pdfplumber.open(path) as pdf:
         for page in pdf.pages:
+            page_rows = []
             tables = [t for t in page.extract_tables() if t and len(t) > 1]
-            for t in tables: out += _rows(t[0], t[1:], name, "pdf")
-            if not tables:
+            for t in tables:
+                page_rows += _rows(t[0], t[1:], name, "pdf")
+            if not page_rows:
+                kv = {}
                 for line in (page.extract_text() or "").splitlines():
-                    m = LINE.match(line.strip())
-                    if m: out.append(_build(dict(zip(["fecha", "cliente", "referencia", "categoria", "valor", "estado"], m.groups())), name, "pdf"))
+                    s = line.strip()
+                    m = LINE.match(s)
+                    if m:
+                        page_rows.append(_build(dict(zip(["fecha", "cliente", "referencia", "categoria", "valor", "estado"], m.groups())), name, "pdf"))
+                        continue
+                    km = KV_LINE.match(s)
+                    if km:
+                        k = ALIASES.get(re.sub(r"\s+", " ", km.group(1).strip().lower()))
+                        val = km.group(2).lstrip(": ").strip()
+                        if k and val:
+                            if k in kv and len(kv) >= 2:
+                                page_rows.append(_build(kv, name, "pdf"))
+                                kv = {}
+                            kv[k] = val
+                if len(kv) >= 2:
+                    page_rows.append(_build(kv, name, "pdf"))
+            out += page_rows
     return out
 
 def parse_file(path: Path) -> list[Record]:
