@@ -7,4 +7,3 @@ anthropic>=0.40
 python-dotenv>=1.0
 pytest>=8
 supabase>=2.10
-postgrest>=0.19
