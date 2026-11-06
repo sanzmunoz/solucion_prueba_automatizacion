@@ -5,6 +5,12 @@ import os
 import pandas as pd
 from typing import Optional
 
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 COLS = [
     "row_hash", "fecha", "cliente", "categoria", "cantidad",
     "referencia", "valor", "estado", "issues", "source_file", "source_type"
