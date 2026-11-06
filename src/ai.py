@@ -38,13 +38,17 @@ def fallback_summary(s: dict) -> str:
 
 def _call_gemini(stats_json: str, api_key: str) -> tuple[str, str]:
     model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"parts": [{"text": stats_json}]}],
+        "contents": [{"role": "user", "parts": [{"text": stats_json}]}],
         "generationConfig": {"maxOutputTokens": 300}
     }
-    resp = httpx.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=20.0)
+    if api_key.startswith("AQ."):
+        url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent"
+        resp = httpx.post(url, params={"key": api_key}, json=payload, timeout=20.0)
+    else:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        resp = httpx.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=20.0)
     resp.raise_for_status()
     text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     return text, model
