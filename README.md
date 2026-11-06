@@ -120,11 +120,13 @@ ALLOWED_SENDER=reportes@empresa.com
 
 ### Paso 4: Ejecutar Pipeline
 
-#### Modo Demo (con archivos locales de muestra):
+#### Modo Demo (con archivos locales de muestra incluidos en `data/samples`):
 ```bash
-python -m src.pipeline --local ../shared/samples
+python -m src.pipeline --local data/samples
 ```
 *Si se ejecuta por segunda vez, los archivos y registros ya procesados se omitirán automáticamente.*
+*Para regenerar los archivos de ejemplo desde cero:* `python tools/make_samples.py data/samples`.
+*Para migrar una base de datos SQLite previa a Supabase:* `python tools/migrate_sqlite_to_supabase.py --sqlite data/records.db`.
 
 #### Modo Correo Real (IMAP):
 ```bash
