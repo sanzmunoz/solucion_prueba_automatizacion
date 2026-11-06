@@ -1,1 +1,1 @@
-"""Paquete src para automatización de ingesta y visualización."""
+"""Source package for data ingestion and visualization."""

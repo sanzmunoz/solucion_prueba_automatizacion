@@ -1,6 +1,4 @@
-"""Capa de datos con Supabase (PostgreSQL + PostgREST).
-Reemplaza SQLite manteniendo la misma interfaz pública para pipeline, dashboard y tests.
-Idempotencia en registros con row_hash (PK) y conteo con Opción A."""
+"""Database module for Supabase (PostgreSQL). It stores records, tracks processed files, and saves summaries."""
 import os
 import pandas as pd
 from typing import Optional
@@ -11,13 +9,14 @@ try:
 except ImportError:
     pass
 
+# Columns expected in the records table
 COLS = [
     "row_hash", "fecha", "cliente", "categoria", "cantidad",
     "referencia", "valor", "estado", "issues", "source_file", "source_type"
 ]
 
 def _get_credential(key_name: str) -> Optional[str]:
-    """Obtiene credenciales desde streamlit secrets o variables de entorno."""
+    """Gets a secret key from Streamlit secrets or environment variables."""
     try:
         import streamlit as st
         if hasattr(st, "secrets") and key_name in st.secrets:
@@ -27,10 +26,10 @@ def _get_credential(key_name: str) -> Optional[str]:
     return os.getenv(key_name)
 
 def connect(service_role: bool = True, url: str | None = None, key: str | None = None, client=None):
-    """Crea y retorna un cliente de Supabase.
-    - service_role=True: usa SUPABASE_SERVICE_KEY (pipeline de ingesta, bypass RLS).
-    - service_role=False: usa SUPABASE_ANON_KEY (dashboard, solo lectura por RLS).
-    Si se pasa `client` directamente, se reutiliza (útil para tests e inyección)."""
+    """Creates a Supabase client.
+    - service_role=True: uses service key for pipeline write operations.
+    - service_role=False: uses anon key for read-only dashboard access.
+    """
     if client is not None:
         return client
 
@@ -52,12 +51,12 @@ def connect(service_role: bool = True, url: str | None = None, key: str | None =
     return create_client(supabase_url, supabase_key)
 
 def seen(client, item_id: str) -> bool:
-    """Verifica si un correo o archivo ya fue procesado previamente."""
+    """Checks if a file or email ID was already processed."""
     res = client.table("processed_items").select("item_id").eq("item_id", item_id).limit(1).execute()
     return bool(res.data)
 
 def mark(client, item_id: str, kind: str, detail: str = "", status: str = "ok"):
-    """Registra o actualiza el estado de procesamiento de un archivo o correo."""
+    """Saves or updates the processing state of an item."""
     client.table("processed_items").upsert({
         "item_id": item_id,
         "kind": kind,
@@ -66,18 +65,14 @@ def mark(client, item_id: str, kind: str, detail: str = "", status: str = "ok"):
     }).execute()
 
 def insert_records(client, records: list) -> tuple[int, int]:
-    """Inserta registros con Opción A de deduplicación:
-    1. Consulta hashes existentes en Supabase por lotes.
-    2. Identifica filas nuevas vs duplicadas.
-    3. Realiza upsert solo de filas nuevas en lotes.
-    Retorna (nuevos, duplicados)."""
+    """Inserts new records and counts duplicates. Returns (new_count, dup_count)."""
     if not records:
         return 0, 0
 
     hashes = [r.row_hash for r in records]
     existing_hashes = set()
 
-    # Consultar hashes existentes en chunks de 100
+    # Step 1: Query existing hashes in chunks of 100
     chunk_size = 100
     for i in range(0, len(hashes), chunk_size):
         chunk = hashes[i:i + chunk_size]
@@ -90,6 +85,7 @@ def insert_records(client, records: list) -> tuple[int, int]:
     new_count = 0
     dup_count = 0
 
+    # Step 2: Separate new records from duplicate records
     for r in records:
         h = r.row_hash
         if h in existing_hashes or h in seen_in_batch:
@@ -99,7 +95,7 @@ def insert_records(client, records: list) -> tuple[int, int]:
             to_insert.append(r.to_row())
             new_count += 1
 
-    # Insertar en lotes de 200 filas
+    # Step 3: Insert new records in batches of 200
     insert_batch_size = 200
     for i in range(0, len(to_insert), insert_batch_size):
         batch = to_insert[i:i + insert_batch_size]
@@ -108,11 +104,12 @@ def insert_records(client, records: list) -> tuple[int, int]:
     return new_count, dup_count
 
 def load_df(client) -> pd.DataFrame:
-    """Carga todos los registros paginados desde Supabase (PostgREST limita a 1000 por request)."""
+    """Loads all records from Supabase into a Pandas DataFrame using pagination."""
     rows = []
     step = 1000
     start = 0
 
+    # Fetch rows page by page (1000 rows per request)
     while True:
         res = client.table("records").select("*").range(start, start + step - 1).execute()
         chunk = res.data or []
@@ -128,11 +125,11 @@ def load_df(client) -> pd.DataFrame:
     return df
 
 def save_summary(client, text: str, model: str):
-    """Guarda el resumen ejecutivo generado por IA en la tabla summaries."""
+    """Saves the AI executive summary text to the database."""
     client.table("summaries").insert({"text": text, "model": model}).execute()
 
 def latest_summary(client) -> Optional[tuple[str, str, str]]:
-    """Obtiene el último resumen ejecutivo registrado: (texto, modelo, fecha_creacion)."""
+    """Gets the most recent executive summary: (text, model, created_at)."""
     res = client.table("summaries").select("text, model, created_at").order("id", desc=True).limit(1).execute()
     if res.data:
         first = res.data[0]
@@ -140,7 +137,7 @@ def latest_summary(client) -> Optional[tuple[str, str, str]]:
     return None
 
 def load_processed_history(client) -> pd.DataFrame:
-    """Carga historial de archivos procesados si el rol tiene permisos."""
+    """Loads the history of processed files for the status dashboard."""
     try:
         res = client.table("processed_items").select("processed_at, kind, status, detail").eq("kind", "file").order("processed_at", desc=True).execute()
         df = pd.DataFrame(res.data or [])
@@ -148,5 +145,5 @@ def load_processed_history(client) -> pd.DataFrame:
             return pd.DataFrame(columns=["processed_at", "kind", "status", "detail"])
         return df
     except Exception:
-        # Rol anon no tiene acceso por RLS (política de seguridad)
+        # Return empty DataFrame if user has no read permission
         return pd.DataFrame(columns=["processed_at", "kind", "status", "detail"])
