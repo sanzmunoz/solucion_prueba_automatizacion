@@ -35,6 +35,22 @@ with st.sidebar:
 
 d = d.copy()
 d["problema"] = d.issues.fillna("") != ""
+hist = db.load_processed_history(c)
+
+# Alertas proactivas de documentos con errores o información inconsistente
+if not hist.empty and "status" in hist.columns:
+    err_docs = hist[hist["status"] == "error"]
+    if not err_docs.empty:
+        detalles = "; ".join(err_docs["detail"].dropna().astype(str).tolist()[:3])
+        st.error(f"Alerta de documentos con error de lectura ({len(err_docs)}): {detalles}")
+
+num_problemas = int(d.problema.sum())
+if num_problemas > 0:
+    archivos_afectados = ", ".join(sorted(d[d.problema]["source_file"].dropna().unique()))
+    st.warning(
+        f"Alerta de información inconsistente: se detectaron {num_problemas} registro(s) con datos "
+        f"incompletos o inválidos en: {archivos_afectados}."
+    )
 
 # KPIs obligatorios + métricas adicionales justificadas
 done = d[d.estado == "Completado"]
@@ -91,7 +107,6 @@ else:
 
 # Historial de ingesta
 st.subheader("Historial de archivos procesados")
-hist = db.load_processed_history(c)
 if not hist.empty:
     st.dataframe(hist, width="stretch")
 else:
