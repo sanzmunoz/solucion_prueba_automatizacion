@@ -1,6 +1,6 @@
 """Orquestador: correo -> descarga -> parseo -> validación -> Supabase -> resumen IA.
 Uso:  python -m src.pipeline            (IMAP real)
-      python -m src.pipeline --local ../shared/samples   (demo sin correo)"""
+      python -m src.pipeline --local data/samples   (demo sin correo)"""
 import argparse, hashlib, logging, os
 from pathlib import Path
 from dotenv import load_dotenv
