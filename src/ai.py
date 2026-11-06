@@ -77,5 +77,5 @@ def executive_summary(df: pd.DataFrame) -> tuple[str, str]:
         if google_key:
             return _call_gemini(stats_json, google_key)
         return _call_anthropic(stats_json, anthropic_key)
-    except Exception as e:  # red, cuota, clave inválida...
-        return fallback_summary(s) + f" (IA no disponible: {type(e).__name__})", "fallback"
+    except Exception:  # red, cuota, clave inválida...
+        return fallback_summary(s), "fallback"
