@@ -226,6 +226,35 @@ def test_connect_anon_never_uses_service_key(monkeypatch):
     with pytest.raises(ValueError, match="SUPABASE_ANON_KEY"):
         db.connect(service_role=False)
 
+def test_mail_client_error_handling_and_logout(monkeypatch, tmp_path):
+    from src import mail_client
+    monkeypatch.delenv("IMAP_HOST", raising=False)
+    with pytest.raises(ValueError, match="Credenciales IMAP"):
+        mail_client.fetch_attachments("a@b.com", tmp_path, lambda _: False)
+
+    monkeypatch.setenv("IMAP_HOST", "imap.test.com")
+    monkeypatch.setenv("IMAP_USER", "u@test.com")
+    monkeypatch.setenv("IMAP_PASSWORD", "secret")
+    logged_out = {"called": False}
+
+    class FakeIMAP:
+        def __init__(self, host): pass
+        def login(self, u, p): pass
+        def select(self, box, readonly=True): raise RuntimeError("Fallo simulado de red IMAP")
+        def logout(self): logged_out["called"] = True
+
+    monkeypatch.setattr(mail_client.imaplib, "IMAP4_SSL", FakeIMAP)
+    with pytest.raises(RuntimeError, match="Fallo simulado"):
+        mail_client.fetch_attachments("a@b.com", tmp_path, lambda _: False)
+    assert logged_out["called"] is True
+
+def test_processed_history_for_alerts(fake_client):
+    db.mark(fake_client, "file:abc", "file", "reporte_ok.xlsx: 10 nuevos, 0 duplicados", "ok")
+    db.mark(fake_client, "file:def", "file", "corrupto.pdf: archivo dañado", "error")
+    hist = db.load_processed_history(fake_client)
+    assert len(hist) == 2
+    assert (hist["status"] == "error").sum() == 1
+
 @pytest.mark.integration
 def test_supabase_live_integration():
     url = os.getenv("SUPABASE_URL")
