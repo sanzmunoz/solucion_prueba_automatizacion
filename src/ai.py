@@ -6,6 +6,12 @@ import os, json
 import httpx
 import pandas as pd
 
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 SYSTEM_PROMPT = (
     "Eres analista de datos. Redacta un resumen ejecutivo de 3-4 frases en español "
     "usando EXCLUSIVAMENTE las cifras dadas. No inventes datos. "
