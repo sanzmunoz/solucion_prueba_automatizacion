@@ -191,10 +191,26 @@ def test_load_df_pagination_over_1000(fake_client):
 
 def test_summary_fallback_has_real_numbers(fake_client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     process_file(fake_client, SAMPLES / "reporte_semana_1.xlsx")
     text, model = ai.executive_summary(db.load_df(fake_client))
     assert model == "fallback"
     assert "12 registros" in text
+
+def test_summary_with_google_gemini(fake_client, monkeypatch):
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+    class FakeResp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"candidates": [{"content": {"parts": [{"text": "Resumen generado con Gemini."}]}}]}
+
+    monkeypatch.setattr(ai.httpx, "post", lambda *a, **kw: FakeResp())
+    process_file(fake_client, SAMPLES / "reporte_semana_1.xlsx")
+    text, model = ai.executive_summary(db.load_df(fake_client))
+    assert model == "gemini-2.5-flash"
+    assert text == "Resumen generado con Gemini."
 
 def test_summaries_storage(fake_client):
     db.save_summary(fake_client, "Resumen de prueba", "claude-haiku-5-5")
