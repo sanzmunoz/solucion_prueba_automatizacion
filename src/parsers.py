@@ -46,10 +46,14 @@ def _build(row: dict, name: str, typ: str) -> Record:
 
 def _rows(headers, values, name, typ):
     keys = [ALIASES.get(str(h or "").strip().lower()) for h in headers]
+    if not any(keys):
+        return []
     out = []
     for vals in values:
         if all(v in (None, "") for v in vals): continue
-        out.append(_build({k: v for k, v in zip(keys, vals) if k}, name, typ))
+        mapped = {k: v for k, v in zip(keys, vals) if k and v not in (None, "")}
+        if not mapped: continue
+        out.append(_build(mapped, name, typ))
     return out
 
 def parse_excel(path: Path) -> list[Record]:
