@@ -1,174 +1,200 @@
-# Solución de Automatización Operacional: Correo, IA & Dashboard (Python + Supabase + Streamlit)
+# Operational Automation Solution: Email, AI & Dashboard (Python + Supabase + Streamlit)
 
-Solución integral y funcional para automatizar la recepción, procesamiento, validación y visualización de reportes operacionales recibidos por correo electrónico (formatos Excel y PDF), con persistencia en la nube (**Supabase**) y visualización interactiva (**Streamlit**).
+An automated and functional end-to-end solution designed to receive, process, validate, and display operational reports sent by email (Excel `.xlsx` and PDF formats). The solution uses **Supabase (PostgreSQL)** for cloud persistence, **AI (Google Gemini / Anthropic Claude)** for executive summaries, and **Streamlit** for real-time interactive dashboards.
 
 ---
 
-## 1. Arquitectura General
+## 1. System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Ingesta ["Ingesta & Automatización"]
-        CRON[GitHub Actions: Cron 8-18h Bogota] --> PIPE[src/pipeline.py]
-        MANUAL[Ejecución Local / Manual] --> PIPE
-        MAIL[(Buzón IMAP)] -->|Filtro remitente exacto| MC[src/mail_client.py]
-        MC -->|Descarga PDF/Excel| PIPE
+    subgraph Ingestion ["Ingestion & Automation"]
+        CRON[GitHub Actions: Workday Cron 8:00-18:00 Bogota] --> PIPE[src/pipeline.py]
+        MANUAL[Manual / Local Run] --> PIPE
+        MAIL[(IMAP Email Inbox)] -->|Exact Sender Filter| MC[src/mail_client.py]
+        MC -->|Download PDF & Excel| PIPE
     end
 
-    subgraph Procesamiento ["Parseo & Validación"]
+    subgraph Processing ["Parsing & Quality Validation"]
         PIPE --> PX[src/parsers.py: openpyxl + pdfplumber]
-        PX --> REC[Record Común: src/schema.py]
-        REC --> VAL[src/validate.py: Reglas de Calidad]
+        PX --> REC[Common Record: src/schema.py]
+        REC --> VAL[src/validate.py: Business Rules]
     end
 
-    subgraph Persistencia ["Supabase Database"]
-        VAL --> DB_MOD[src/db.py: Opción A Dedupe]
+    subgraph Storage ["Cloud Database: Supabase"]
+        VAL --> DB_MOD[src/db.py: Option A Deduplication]
         DB_MOD -->|service_role key| SUPA[(Supabase PostgreSQL)]
-        SUPA --> T_REC[Tabla: records]
-        SUPA --> T_ITEMS[Tabla: processed_items]
-        SUPA --> T_SUMM[Tabla: summaries]
+        SUPA --> T_REC[Table: records]
+        SUPA --> T_ITEMS[Table: processed_items]
+        SUPA --> T_SUMM[Table: summaries]
     end
 
-    subgraph InteligenciaArtificial ["Uso de IA"]
-        PIPE --> AI[src/ai.py: Claude Haiku]
-        AI -->|Fallback determinista si falla| T_SUMM
+    subgraph ArtificialIntelligence ["AI Executive Summary"]
+        PIPE --> AI[src/ai.py: Gemini / Claude]
+        AI -->|Deterministic Fallback if API fails| T_SUMM
     end
 
-    subgraph Visualizacion ["Dashboard"]
-        SUPA -->|anon key + RLS Select| DASH[dashboard.py: Streamlit]
+    subgraph Visualization ["Dashboard & UI"]
+        SUPA -->|anon key + Read-Only RLS| DASH[dashboard.py: Streamlit]
     end
 ```
 
 ---
 
-## 2. Decisiones Técnicas y Justificación
+## 2. Key Technical Decisions & Highlights
 
-### Persistencia en Supabase
-- **Problema que resuelve:** A diferencia de SQLite local (que en GitHub Actions o Streamlit Cloud corre en contenedores efímeros sin compartir disco), Supabase proporciona persistencia centralizada en PostgreSQL, accesible tanto por el pipeline de ingesta como por el dashboard.
-- **Deduplicación por `row_hash` (PK):** Cada fila genera una huella SHA-256 basada en `fecha|cliente|categoria|valor|estado|referencia`. Esto impide filas duplicadas aunque el mismo reporte se reenvíe.
-- **Conteo con Opción A:** Antes de insertar un lote, se consultan los `row_hash` existentes en Supabase (`in_("row_hash", chunk)`). Se contabilizan exactamente las filas nuevas y duplicadas, y solo se insertan las nuevas.
-- **Seguridad y Mínimo Privilegio:**
-  - El **pipeline** usa `SUPABASE_SERVICE_KEY` para inserción y registro en `processed_items` (bypasseando RLS).
-  - El **dashboard** usa `SUPABASE_ANON_KEY`, restringido por Row Level Security (RLS) únicamente a operaciones `SELECT` en `records` y `summaries`. `processed_items` no está expuesta al cliente anónimo.
+### Cloud Database & 3-Layer Deduplication (Supabase)
+- **Centralized Storage:** Local SQLite files are deleted when running on ephemeral containers like GitHub Actions or Streamlit Cloud. Supabase provides a shared PostgreSQL database that connects both the background pipeline and the frontend.
+- **Three Deduplication Layers:**
+  1. **Email Layer:** `Message-ID` is verified so the same email is not downloaded again.
+  2. **File Layer:** SHA-256 hash of each attachment prevents processing identical files twice.
+  3. **Record Layer (`row_hash` PK):** Each row generates a unique SHA-256 signature (`date|client|category|value|status|reference`). Even if the same data arrives in a different file or email, duplicates are blocked at the database level.
+- **Option A Counting:** Before saving new rows, the pipeline checks existing `row_hash` values in batches. This gives an exact count of new rows versus duplicate rows.
 
-### Automatización y Horario de Ejecución
-- **Cron en horario laboral:** Programado en `.github/workflows/ingest.yml` para ejecutarse cada hora únicamente de 8:00 a 18:00 hora Colombia (`0 13-23 * * *` en UTC).
-- **Ahorro de cuotas:** No se ejecutan tareas innecesarias en la noche. Los correos recibidos fuera de horario se procesan a las 8:00 a. m. del siguiente ciclo.
-- **Idempotencia en 3 capas:**
-  1. `Message-ID` del correo.
-  2. SHA-256 del archivo adjunto.
-  3. `row_hash` del registro individual.
+### Security & Principle of Least Privilege (RLS)
+- **Ingestion Pipeline:** Uses `SUPABASE_SERVICE_KEY` only in secure server environments to insert rows and save audit logs.
+- **Public Dashboard:** Uses `SUPABASE_ANON_KEY`. Row Level Security (RLS) policies only permit read-only `SELECT` access to `records`, `summaries`, and file logs. Email Message-IDs (`kind = 'mail'`) remain completely private.
 
-### Uso Quirúrgico de Inteligencia Artificial
-- **Dónde sí:** En la redacción del **resumen ejecutivo** en lenguaje natural. Convierte métricas precalculadas en una síntesis accionable para líderes operacionales.
-- **Control de alucinaciones:** El LLM **no calcula números**; recibe un JSON generado por pandas con cifras 100% exactas y una instrucción de sistema estricta de no inventar datos.
-- **Fallback determinista:** Si no se configura `ANTHROPIC_API_KEY` o hay problemas de red, se genera una plantilla determinista con los datos exactos. El pipeline **nunca falla por la IA**.
-- **Dónde no:** Parseo de documentos y validaciones. Ambos se resuelven con código determinista (expresiones regulares y reglas), siendo mucho más rápido, barato y reproducible.
+### Practical & Safe Use of AI
+- **Where AI is used:** To write a **3 to 4 sentence executive summary** in natural language. This saves managers from writing manual reports every cycle.
+- **No Hallucinations:** The AI does not compute numbers. A `pandas` function calculates all metrics in Python first. The language model only receives exact JSON numbers and a strict system instruction not to invent data.
+- **Automatic Fallback:** If the AI API key is missing, network fails, or quota is exceeded, the system generates a clear deterministic summary. The pipeline **never crashes** because of AI.
+- **Deterministic Document Parsing:** Excel and PDF files are parsed using standard Python libraries (`openpyxl`, `pdfplumber`, regex). Standard programming is faster, 100% accurate, free of charge, and easy to unit test.
 
----
-
-## 3. Métricas del Dashboard
-
-El dashboard incluye los indicadores solicitados en la prueba técnica:
-1. **Total de registros procesados:** Volumen de operaciones analizadas.
-2. **Valor total procesado:** Suma monetaria de los registros.
-3. **Registros por categoría:** Distribución por tipo de servicio/producto (gráfico de barras).
-4. **Registros por estado:** Proporción de estados (gráfico circular/donut).
-5. **Evolución temporal:** Serie de tiempo diaria de registros y volumen económico.
-
-### Métricas Adicionales Justificadas
-6. **Ticket promedio (`valor.mean()`):** Permite identificar el tamaño típico de cada operación y detectar variaciones anómalas en el volumen transaccional.
-7. **Porcentaje de completitud (`completados / total * 100`):** Mide la eficiencia operativa del flujo de negocio.
-8. **Registros con incidencias (`issues != ""`):** Indicador de calidad de datos que resalta registros incompletos, montos negativos o fechas futuras.
-9. **Clientes únicos (`cliente.nunique()`):** Mide la diversificación de la cartera de clientes en el periodo analizado.
+### Workday Automation Schedule
+- Configured in `.github/workflows/ingest.yml` to run every hour between **8:00 AM and 6:00 PM Colombia time** (`0 13-23 * * *` in UTC).
+- Night executions are avoided to save free GitHub Actions minutes. Any email received at night is processed automatically at 8:00 AM the next morning.
 
 ---
 
-## 4. Instalación y Ejecución Local
+## 3. Dashboard Metrics & Alerts
 
-### Paso 1: Clonar y configurar entorno
+The dashboard displays all required metrics plus justified extra indicators:
+
+1. **Total Processed Records:** Total number of operational operations.
+2. **Total Monetary Value:** Sum of all recorded transactions.
+3. **Records by Category:** Distribution of operations across services or products (Bar Chart).
+4. **Records by Status:** Percentage share of operational states (Donut Chart).
+5. **Timeline Evolution:** Daily volume and monetary value trends (Time Series Chart).
+
+### Justified Additional Metrics
+6. **Average Ticket Size (`value.mean()`):** Shows the typical transaction size to detect abnormal variations.
+7. **Completion Rate (`Completed / Total * 100`):** Measures the operational efficiency of the process.
+8. **Records with Issues (`issues != ""`):** Key data quality indicator highlighting incomplete fields, negative values, or future dates.
+9. **Unique Clients (`client.nunique()`):** Measures portfolio diversification.
+
+### Proactive Visual Alerts
+- **Warning Banner (`st.warning`):** Alert shown at the top of the screen when records have missing or invalid data, naming the affected source files.
+- **Error Banner (`st.error`):** Red alert displayed if an attachment failed to read (e.g., corrupted file) with the technical reason.
+
+---
+
+## 4. Quick Start & Local Execution
+
+### Step 1: Clone and Set Up Virtual Environment
 ```bash
 python -m venv .venv
-# En Windows:
+
+# On Windows:
 .venv\Scripts\activate
-# En Linux/Mac:
+
+# On Linux / macOS:
 source .venv/bin/activate
 
 pip install -r requirements.txt
 ```
 
-### Paso 2: Configurar Supabase
-1. Crea un proyecto gratuito en [Supabase](https://supabase.com).
-2. Ve al **SQL Editor** en el panel de Supabase y ejecuta el contenido de `supabase/schema.sql`.
-3. Obtén la **Project URL**, la **anon key** y la **service_role key** desde *Project Settings > API*.
+### Step 2: Configure Supabase
+1. Create a free project at [Supabase](https://supabase.com).
+2. Open the **SQL Editor** in the Supabase dashboard and run the script in `supabase/schema.sql`.
+3. Go to **Project Settings > API** and copy:
+   - `Project URL` (`SUPABASE_URL`)
+   - `anon public key` (`SUPABASE_ANON_KEY`)
+   - `service_role secret key` (`SUPABASE_SERVICE_KEY`)
 
-### Paso 3: Configurar variables de entorno
-Copia `.env.example` a `.env` y asigna tus claves:
+### Step 3: Set Up Environment Variables
+Copy `.env.example` to `.env`:
 ```bash
 cp .env.example .env
 ```
-Configura:
+Fill in your credentials:
 ```env
-SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_SERVICE_KEY=tu_service_role_key
-SUPABASE_ANON_KEY=tu_anon_key
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_KEY=your_service_role_secret_key
+SUPABASE_ANON_KEY=your_anon_public_key
 
-# Opcionales para demo
-ANTHROPIC_API_KEY=
-ALLOWED_SENDER=reportes@empresa.com
+# AI Provider (Optional - works with fallback if empty)
+GOOGLE_API_KEY=your_gemini_api_key
+GEMINI_MODEL=gemini-2.5-flash
+
+# Email Ingestion (Optional for local demo)
+IMAP_HOST=imap.gmail.com
+IMAP_USER=your_email@gmail.com
+IMAP_PASSWORD=your_16_letter_app_password
+ALLOWED_SENDER=reports@company.com
 ```
 
-### Paso 4: Ejecutar Pipeline
+### Step 4: Run the Ingestion Pipeline
 
-#### Modo Demo (con archivos locales de muestra incluidos en `data/samples`):
+#### Demo Mode (using included sample files in `data/samples/`):
 ```bash
 python -m src.pipeline --local data/samples
 ```
-*Si se ejecuta por segunda vez, los archivos y registros ya procesados se omitirán automáticamente.*
-*Para regenerar los archivos de ejemplo desde cero:* `python tools/make_samples.py data/samples`.
-*Para migrar una base de datos SQLite previa a Supabase:* `python tools/migrate_sqlite_to_supabase.py --sqlite data/records.db`.
+*If you run this command a second time, already processed files and duplicate rows will be skipped automatically.*
 
-#### Modo Correo Real (IMAP):
+#### Real Email Mode (IMAP):
 ```bash
 python -m src.pipeline
 ```
 
-### Paso 5: Iniciar Dashboard
+### Step 5: Start the Interactive Dashboard
 ```bash
 streamlit run dashboard.py
 ```
+Open **http://localhost:8501** in your web browser.
 
-### Paso 6: Ejecutar Pruebas Automatizadas
+### Step 6: Run Automated Tests
 ```bash
-pytest
+pytest -v
 ```
-*Los tests incluyen un emulador en memoria de Supabase para ejecutarse de inmediato sin necesidad de conexión a internet.*
+*Includes 20 automated tests verifying parsers, money/date formats, batch deduplication, error handling, and live Supabase integration.*
 
 ---
 
-## 5. Despliegue Gratuito
+## 5. Free-Tier Deployment Guide
 
-### 1. Ingesta Automática (GitHub Actions)
-1. Sube este repositorio a GitHub.
-2. Configura los secretos en *Settings > Secrets and variables > Actions*:
+### 1. Ingestion Job (GitHub Actions)
+1. Push this repository to GitHub.
+2. In your GitHub repository, go to **Settings > Secrets and variables > Actions** and add:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_KEY`
    - `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD`, `ALLOWED_SENDER`
-   - `ANTHROPIC_API_KEY` (opcional)
-3. El workflow `.github/workflows/ingest.yml` correrá automáticamente cada hora de 8:00 a 18:00 (hora Bogotá) o manualmente mediante `workflow_dispatch`.
+   - `GOOGLE_API_KEY` (or `ANTHROPIC_API_KEY`)
+3. The workflow `.github/workflows/ingest.yml` will run automatically during work hours or manually via **Run workflow**.
 
-### 2. Dashboard Público (Streamlit Community Cloud)
-1. Conecta tu repositorio en [Streamlit Cloud](https://share.streamlit.io).
-2. Configura los *Secrets* en la plataforma:
+### 2. Public Dashboard (Streamlit Community Cloud)
+1. Link your repository at [share.streamlit.io](https://share.streamlit.io).
+2. Set the main file path to `dashboard.py`.
+3. In **App Settings > Secrets**, configure:
    ```toml
-   SUPABASE_URL = "https://tu-proyecto.supabase.co"
-   SUPABASE_ANON_KEY = "tu_anon_key"
+   SUPABASE_URL = "https://your-project.supabase.co"
+   SUPABASE_ANON_KEY = "your_anon_public_key"
    ```
-3. El dashboard se desplegará de forma gratuita y leerá en tiempo real los datos consolidados por GitHub Actions.
+4. Deploy the app. The dashboard will read directly from Supabase with read-only security.
 
 ---
 
-## 6. Limitaciones Conocidas
-- **Pausa de inactividad en Supabase:** En el plan gratuito, si la base de datos pasa 7 días sin peticiones se pausa temporalmente. El cron horario evita esto de lunes a domingo.
-- **Layout de PDFs:** El parser soporta tablas estándar y texto sin bordes formateado como `fecha cliente REF categoría valor estado`. Variaciones drásticas en la disposición del PDF requieren ajustar la expresión regular en `src/parsers.py`.
-- **Contraseñas de aplicación IMAP:** Cuentas con 2FA requieren contraseñas de aplicación dedicadas generadas en la cuenta del proveedor de correo (Google / Microsoft).
+## 6. Technical Documentation Links
+
+Detailed engineering documentation is available in the `docs/` folder:
+- [`docs/DECISIONES.md`](docs/DECISIONES.md): Architectural Decision Records (ADR) justifying each technology choice.
+- [`docs/USO_DE_IA.md`](docs/USO_DE_IA.md): AI justification, exact prompts, validation rules, and real development error logs.
+- [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md): Relational database models, data types, and security policies.
+- [`docs/CHECKLIST_ENTREGA.md`](docs/CHECKLIST_ENTREGA.md): Verification matrix covering 100% of the challenge requirements.
+
+---
+
+## 7. Known Limitations
+- **Supabase Free Tier Inactivity:** Projects on the free plan pause after 7 consecutive days without requests. The hourly workday cron keeps the project active.
+- **Gmail IMAP Access:** Requires Google 2-Step Verification and a dedicated 16-character App Password.
+- **PDF Layout Variations:** The parser supports bordered tables, unbordered line tables, and vertical key-value layouts. Highly unusual designs may require adding custom patterns to `src/parsers.py`.
