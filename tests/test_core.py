@@ -1,12 +1,17 @@
-import sys, pathlib
+import os
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
 import pytest
 from src import db, ai
 from src.parsers import to_money, to_date, parse_file
-from src.pipeline import process_file
+from src.pipeline import process_file, file_sha
+from src.schema import Record
 from src.validate import validate
 
-SAMPLES = pathlib.Path(__file__).resolve().parents[2] / "shared" / "samples"
+SAMPLES = pathlib.Path(__file__).resolve().parents[1] / "data" / "samples"
 
 class FakeQuery:
     def __init__(self, table: str, store: dict):
@@ -26,7 +31,8 @@ class FakeQuery:
         return self
 
     def in_(self, col, vals):
-        self._filters.append(lambda r: r.get(col) in vals)
+        val_set = set(vals)
+        self._filters.append(lambda r: r.get(col) in val_set)
         return self
 
     def order(self, col, desc=False):
@@ -49,9 +55,15 @@ class FakeQuery:
         if self._order_by:
             rows = sorted(rows, key=lambda r: r.get(self._order_by, 0), reverse=self._desc)
         if self._range:
-            rows = rows[self._range[0]:self._range[1] + 1]
+            # PostgREST corta en máximo 1000 filas por consulta
+            start, end = self._range
+            max_end = min(end, start + 999)
+            rows = rows[start:max_end + 1]
         elif self._limit:
             rows = rows[:self._limit]
+        else:
+            rows = rows[:1000]
+
         class Result:
             def __init__(self, data):
                 self.data = data
@@ -61,13 +73,17 @@ class FakeQuery:
         items = data if isinstance(data, list) else [data]
         pk = on_conflict or "item_id"
         tbl = self.store.setdefault(self.table, [])
+        existing_map = {r.get(pk): r for r in tbl if r.get(pk) is not None}
         for item in items:
-            existing = next((r for r in tbl if r.get(pk) == item.get(pk)), None)
-            if existing:
+            key = item.get(pk)
+            if key in existing_map:
                 if not ignore_duplicates:
-                    existing.update(item)
+                    existing_map[key].update(item)
             else:
-                tbl.append(dict(item))
+                new_row = dict(item)
+                tbl.append(new_row)
+                if key is not None:
+                    existing_map[key] = new_row
         return self
 
     def insert(self, data):
@@ -83,7 +99,7 @@ class FakeQuery:
         return self
 
 class FakeSupabaseClient:
-    """Emulador en memoria de Supabase para ejecutar tests sin dependencia de red."""
+    """Emulador en memoria de Supabase (incluye límite de 1000 filas de PostgREST)."""
     def __init__(self):
         self.store = {"records": [], "processed_items": [], "summaries": []}
 
@@ -126,8 +142,52 @@ def test_idempotent_and_no_duplicates(fake_client):
     r2 = process_file(fake_client, f)
 
     assert r2["skipped"] is True
-    assert r1["dup"] == 1                       # El registro duplicado se contabiliza
+    assert r1["dup"] == 1                       # El registro duplicado dentro del archivo se contabiliza
     assert len(fake_client.store["records"]) == r1["new"]
+
+    # Si el mismo contenido llega en otro archivo distinto, tampoco duplica en records
+    recs = validate(parse_file(f))
+    new2, dup2 = db.insert_records(fake_client, recs)
+    assert new2 == 0 and dup2 == len(recs)
+    assert len(fake_client.store["records"]) == r1["new"]
+
+def test_mail_idempotency(fake_client):
+    mid = "mail:<msg-001@empresa.com>"
+    assert db.seen(fake_client, mid) is False
+    db.mark(fake_client, mid, "mail", "2 adjuntos")
+    assert db.seen(fake_client, mid) is True
+    assert db.seen(fake_client, "mail:<otro@empresa.com>") is False
+
+def test_corrupt_file_marks_error(fake_client, tmp_path):
+    bad_file = tmp_path / "corrupto.xlsx"
+    bad_file.write_bytes(b"no es un zip ni un excel valido")
+
+    res = process_file(fake_client, bad_file)
+    assert "error" in res
+    sha = file_sha(bad_file)
+    assert db.seen(fake_client, "file:" + sha) is True
+    saved = next(i for i in fake_client.store["processed_items"] if i["item_id"] == "file:" + sha)
+    assert saved["status"] == "error"
+
+def test_load_df_pagination_over_1000(fake_client):
+    records = [
+        Record(
+            fecha="2026-10-15",
+            cliente=f"Cliente {i}",
+            categoria="Servicio A",
+            valor=float(1000 + i),
+            estado="Completado",
+            referencia=f"REF-{i:05d}",
+            source_file="lote_grande.pdf",
+            source_type="pdf"
+        )
+        for i in range(1250)
+    ]
+    new, dup = db.insert_records(fake_client, records)
+    assert new == 1250 and dup == 0
+
+    df = db.load_df(fake_client)
+    assert len(df) == 1250
 
 def test_summary_fallback_has_real_numbers(fake_client, monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
@@ -142,3 +202,20 @@ def test_summaries_storage(fake_client):
     assert latest is not None
     assert latest[0] == "Resumen de prueba"
     assert latest[1] == "claude-haiku-5-5"
+
+def test_connect_anon_never_uses_service_key(monkeypatch):
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "secret-service-key")
+    monkeypatch.delenv("SUPABASE_ANON_KEY", raising=False)
+    with pytest.raises(ValueError, match="SUPABASE_ANON_KEY"):
+        db.connect(service_role=False)
+
+@pytest.mark.integration
+def test_supabase_live_integration():
+    url = os.getenv("SUPABASE_URL")
+    key = os.getenv("SUPABASE_SERVICE_KEY")
+    if not url or not key or "your-project" in url:
+        pytest.skip("Variables reales SUPABASE_URL y SUPABASE_SERVICE_KEY no configuradas")
+    c = db.connect(service_role=True)
+    df = db.load_df(c)
+    assert isinstance(df.shape[0], int)
