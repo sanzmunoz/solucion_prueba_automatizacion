@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dotenv import load_dotenv
-from src import db
+from src import db, ai
 
 load_dotenv()
 st.set_page_config(page_title="Dashboard Operacional", layout="wide")
@@ -73,11 +73,13 @@ st.plotly_chart(
 # Resumen ejecutivo con IA
 st.subheader("Resumen ejecutivo (IA)")
 s = db.latest_summary(c)
-if s:
-    st.write(s[0])
-    st.caption(f"Modelo: {s[1]} · Creado: {s[2]}")
+if s and len(d) == len(df):
+    summary_text, summary_model = s[0], s[1]
 else:
-    st.write("Aún no generado.")
+    summary_text, summary_model = ai.executive_summary(d)
+st.write(summary_text)
+origen = "fallback" if summary_model == "fallback" else summary_model
+st.caption(f"Respuesta generada por: {origen}")
 
 # Registros con incidencias
 st.subheader("Registros con inconsistencias o datos incompletos")
