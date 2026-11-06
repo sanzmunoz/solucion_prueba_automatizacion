@@ -1,0 +1,36 @@
+name: Ingest Pipeline
+
+on:
+  schedule:
+    # Ejecuta cada hora entre 8:00 y 18:00 hora Colombia (UTC-5), es decir 13:00-23:00 UTC.
+    # No se ejecuta durante la noche para ahorrar ejecuciones y recursos.
+    - cron: "0 13-23 * * *"
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Execute email ingestion and Supabase processing
+        run: python -m src.pipeline
+        env:
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          ALLOWED_SENDER: ${{ secrets.ALLOWED_SENDER }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ secrets.ANTHROPIC_MODEL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
