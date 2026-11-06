@@ -19,7 +19,7 @@ except Exception as e:
 st.title("Dashboard Operacional")
 
 if df.empty:
-    st.info("Aún no hay datos en Supabase. Ejecuta: python -m src.pipeline --local ../shared/samples")
+    st.info("Aún no hay datos en Supabase. Ejecuta: python -m src.pipeline --local data/samples")
     st.stop()
 
 with st.sidebar:
