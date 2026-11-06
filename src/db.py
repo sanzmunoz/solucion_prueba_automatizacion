@@ -39,7 +39,7 @@ def connect(service_role: bool = True, url: str | None = None, key: str | None =
         if not supabase_key:
             raise ValueError("SUPABASE_SERVICE_KEY no configurada para acceso de escritura en pipeline.")
     else:
-        supabase_key = key or _get_credential("SUPABASE_ANON_KEY") or _get_credential("SUPABASE_SERVICE_KEY")
+        supabase_key = key or _get_credential("SUPABASE_ANON_KEY")
         if not supabase_key:
             raise ValueError("SUPABASE_ANON_KEY no configurada para acceso de lectura en dashboard.")
 
