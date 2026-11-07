@@ -49,14 +49,14 @@ def fallback_summary(s: dict) -> str:
 
 def _call_gemini(stats_json: str, api_key: str) -> tuple[str, str]:
     """Sends the summary request to Google Generative Language API (Gemini)."""
-    model = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash"
-    if model == "gemini-2.5-flash":
-        model = "gemini-3.5-flash"
+    model = os.getenv("GEMINI_MODEL") or "gemini-flash-lite-latest"
+    if model in ("gemini-2.5-flash", "gemini-1.5-flash"):
+        model = "gemini-flash-lite-latest"
 
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": stats_json}]}],
-        "generationConfig": {"maxOutputTokens": 300}
+        "generationConfig": {"maxOutputTokens": 600}
     }
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     resp = httpx.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=30.0)
