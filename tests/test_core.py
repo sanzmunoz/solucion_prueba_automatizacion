@@ -223,7 +223,7 @@ def test_summary_fallback_has_real_numbers(fake_client, monkeypatch):
 def test_summary_with_google_gemini(fake_client, monkeypatch):
     """Tests executive summary generation using Gemini API mock."""
     monkeypatch.setenv("GOOGLE_API_KEY", "test-google-key")
-    monkeypatch.setenv("GEMINI_MODEL", "gemini-2.5-flash")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-3.5-flash")
 
     class FakeResp:
         def raise_for_status(self): pass
@@ -233,7 +233,7 @@ def test_summary_with_google_gemini(fake_client, monkeypatch):
     monkeypatch.setattr(ai.httpx, "post", lambda *a, **kw: FakeResp())
     process_file(fake_client, SAMPLES / "reporte_semana_1.xlsx")
     text, model = ai.executive_summary(db.load_df(fake_client))
-    assert model == "gemini-2.5-flash"
+    assert model == "gemini-3.5-flash"
     assert text == "Resumen generado con Gemini."
 
 def test_summaries_storage(fake_client):
