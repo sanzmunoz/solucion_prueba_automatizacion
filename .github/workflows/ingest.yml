@@ -4,7 +4,7 @@ on:
   schedule:
     # Ejecuta cada hora entre 8:00 y 18:00 hora Colombia (UTC-5), es decir 13:00-23:00 UTC.
     # No se ejecuta durante la noche para ahorrar ejecuciones y recursos.
-    - cron: "0 13-23 * * *"
+    - cron: "19 13-23 * * *"
   workflow_dispatch:
 
 jobs:
