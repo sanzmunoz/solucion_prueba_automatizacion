@@ -1,4 +1,5 @@
 """Streamlit dashboard module. It displays operational KPIs, charts, data alerts, and AI executive summaries."""
+import datetime
 import os
 import pandas as pd
 import plotly.express as px
@@ -26,8 +27,14 @@ if df.empty:
     st.info("Aún no hay datos en Supabase. Ejecuta: python -m src.pipeline --local data/samples")
     st.stop()
 
-# Sidebar filters for status and customer
+# Sidebar controls and filters
 with st.sidebar:
+    st.header("Acciones")
+    if st.button("🔄 Actualizar datos", use_container_width=True):
+        st.rerun()
+    st.caption(f"Última consulta: {datetime.datetime.now().strftime('%H:%M:%S')}")
+    st.divider()
+
     st.header("Filtros")
     estados_disponibles = sorted(df.estado.dropna().unique())
     est = st.multiselect("Estado", estados_disponibles, default=estados_disponibles)

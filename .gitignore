@@ -7,4 +7,3 @@ data/*.log
 data/downloads/
 .pytest_cache/
 .DS_Store
-PLAN_MIGRACION_SUPABASE.md
