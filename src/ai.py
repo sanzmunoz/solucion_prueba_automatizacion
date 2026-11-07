@@ -1,7 +1,9 @@
 """AI executive summary module. It calculates exact metrics and generates text with Gemini or Claude. It uses a safe fallback if no API key is available."""
-import os, json
+import os, json, logging
 import httpx
 import pandas as pd
+
+log = logging.getLogger("ai")
 
 try:
     import truststore
@@ -46,20 +48,18 @@ def fallback_summary(s: dict) -> str:
     ).replace(",", ".")
 
 def _call_gemini(stats_json: str, api_key: str) -> tuple[str, str]:
-    """Sends the summary request to Google Gemini API."""
-    model = os.getenv("GEMINI_MODEL") or "gemini-2.5-flash"
+    """Sends the summary request to Google Generative Language API (Gemini)."""
+    model = os.getenv("GEMINI_MODEL") or "gemini-3.5-flash"
+    if model == "gemini-2.5-flash":
+        model = "gemini-3.5-flash"
+
     payload = {
         "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
         "contents": [{"role": "user", "parts": [{"text": stats_json}]}],
         "generationConfig": {"maxOutputTokens": 300}
     }
-    # Check if API key is a Vertex AI key or AI Studio key
-    if api_key.startswith("AQ."):
-        url = f"https://aiplatform.googleapis.com/v1/publishers/google/models/{model}:generateContent"
-        resp = httpx.post(url, params={"key": api_key}, json=payload, timeout=20.0)
-    else:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
-        resp = httpx.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=20.0)
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    resp = httpx.post(url, headers={"x-goog-api-key": api_key}, json=payload, timeout=30.0)
     resp.raise_for_status()
     text = resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
     return text, model
@@ -94,6 +94,7 @@ def executive_summary(df: pd.DataFrame) -> tuple[str, str]:
         if google_key:
             return _call_gemini(stats_json, google_key)
         return _call_anthropic(stats_json, anthropic_key)
-    except Exception:
+    except Exception as e:
+        log.warning("Fallo al generar resumen con IA (%s): %s. Usando fallback.", "Google Gemini" if google_key else "Anthropic", e)
         # Return fallback text if API call fails
         return fallback_summary(s), "fallback"
